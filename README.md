@@ -1,5 +1,8 @@
 # POmerge
 
+> [!WARNING]
+> WIP: Not tested. Not published.
+
 Git merge driver for PO-files.
 
 - Provides a 3-way merge interface `pomerge <a> <b> <c>`.
