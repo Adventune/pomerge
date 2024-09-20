@@ -1,12 +1,12 @@
 # POmerge
 
 > [!WARNING]
-> WIP: Not tested. Not published.
+> WIP: Tested on couple of small PO-files on Linux. Windows support pending. 
 
 Git merge driver for PO-files.
 
 - Provides a 3-way merge interface `pomerge a b c`.
-- Marks the conflicts in a git-styled markers instead of the `gettext` markers.
+- Marks the conflicts in a git-styled markers instead of the `gettext` markers. // TODO
 
 ## Installation
 
