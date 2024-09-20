@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -40,7 +42,7 @@ func ThreeWayOut(local, base, other, out string, v bool) error {
 	}
 
 	// Make temporary directory
-	tmpDir, err := os.MkdirTemp("/tmp", "pomerge-")
+	tmpDir, err := os.MkdirTemp(os.TempDir(), "pomerge-")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %s", err)
 	}
@@ -60,13 +62,13 @@ func ThreeWayOut(local, base, other, out string, v bool) error {
 	status("canonicalizing input files ...")
 	var waitgroup errgroup.Group
 	waitgroup.Go(func() error {
-		return cleanInput(base, tmpDir)
+		return cleanInput(base, tmpDir, "base")
 	})
 	waitgroup.Go(func() error {
-		return cleanInput(local, tmpDir)
+		return cleanInput(local, tmpDir, "local")
 	})
 	waitgroup.Go(func() error {
-		return cleanInput(other, tmpDir)
+		return cleanInput(other, tmpDir, "other")
 	})
 	if err := waitgroup.Wait(); err != nil {
 		return err
@@ -83,7 +85,7 @@ func ThreeWayOut(local, base, other, out string, v bool) error {
 	})
 	// Extract unchanged messages
 	waitgroup.Go(func() error {
-		return extractUnchanged(tmpDir)
+		return extractUnchanged(filepath.Join(tmpDir, "unchanged"), filepath.Join(tmpDir, "local"), filepath.Join(tmpDir, "other"))
 	})
 	if err := waitgroup.Wait(); err != nil {
 		return err
@@ -91,17 +93,10 @@ func ThreeWayOut(local, base, other, out string, v bool) error {
 
 	// ======= Compute conflicts
 	status("computing conflicts ...")
-	cmd1 := exec.Command(
-		"msgcat",
-		"--force-po",
-		"-o",
-		"-",
-		tmpDir+"/other-changes",
-		tmpDir+"/local-changes",
-	)
-	cmd2 := exec.Command("msggrep", "--msgstr", "-F", "-e", "'#-#-#-#-#'", "-")
-	cmd3 := exec.Command("tee", tmpDir+"/conflicts")
-	err = runPipeline(cmd1, cmd2, cmd3)
+	cmd1 := fmt.Sprintf("msgcat --force-po -o - %s %s", tmpDir+"/other-changes", tmpDir+"/local-changes")
+	cmd2 := "msggrep --msgstr -F -e \"#-#-#-#-#\" -"
+	cmd3 := fmt.Sprintf("tee %s", tmpDir+"/conflicts")
+	err = runPipeline(fmt.Sprintf("%s | %s | %s", cmd1, cmd2, cmd3))
 	if err != nil {
 		return err
 	}
@@ -137,25 +132,9 @@ func ThreeWayOut(local, base, other, out string, v bool) error {
 
 	// create a template to only output messages that are actually needed (union of messages on local and other create the template!)
 	status("computing template and applying it to merge result ...")
-	cmd1 = exec.Command(
-		"msgcat",
-		"--force-po",
-		"-o",
-		"-",
-		tmpDir+"/local",
-		tmpDir+"/other",
-	)
-	cmd2 = exec.Command(
-		"msgmerge",
-		"--force-po",
-		"--quiet",
-		"--no-fuzzy-matching",
-		"-o",
-		tmpDir+"/merge2",
-		tmpDir+"/merge1",
-		"-",
-	)
-	err = runPipeline(cmd1, cmd2)
+	cmd1 = fmt.Sprintf("msgcat --force-po -o - %s %s", tmpDir+"/local", tmpDir+"/other")
+	cmd2 = fmt.Sprintf("msgmerge --force-po --quiet --no-fuzzy-matching -o %s %s -", tmpDir+"/merge2", tmpDir+"/merge1")
+	err = runPipeline(fmt.Sprintf("%s | %s", cmd1, cmd2))
 	if err != nil {
 		return err
 	}
@@ -185,11 +164,9 @@ func ThreeWayOut(local, base, other, out string, v bool) error {
 	}
 
 	status("checking for conflicts in the result ...")
-	err = runExecutable("grep", "-q", "'#-#-#-#-#'", out)
-	if err != nil {
-		if verbose {
-			fmt.Println("conflict(s) detected")
-		}
+	conflictOut, _ := exec.Command("grep", "#-#-#-#-#", out).Output()
+	if len(conflictOut) > 0 {
+		status("conflict(s) detected")
 		return fmt.Errorf("automatic merge failed, exiting with status 1")
 	} else {
 		status("automatic merge completed successfully, exiting with status 0")
@@ -201,50 +178,33 @@ func ThreeWayOut(local, base, other, out string, v bool) error {
 //// File manipulation function
 
 // Changes only in the local file and not in the other file.
-func localOnly(localChanges string, conflicts string, out string) error {
+func localOnly(localChanges, conflicts, out string) error {
 	return runExecutable("msgcat", "--force-po", "-o", out, "--unique", localChanges, conflicts)
 }
 
 // Cleans input files and uses logical filenames for possible conflict markers.
-func cleanInput(file string, tmpDir string) error {
-	return runExecutable("msguniq", "--force-po", "-o", tmpDir+"/"+file, "--unique", file)
+func cleanInput(file, tmpDir, out string) error {
+	return runExecutable("msguniq", "--force-po", "-o", tmpDir+"/"+out, "--unique", file)
 }
 
 // Extract unchanged
-func extractUnchanged(tmpDir string) error {
-	cmd1 := exec.Command(
-		"msgcat",
-		"--force-po",
-		"-o",
-		"-",
-		tmpDir+"/base",
-		tmpDir+"/local",
-		tmpDir+"/other",
-	)
-	cmd2 := exec.Command("msggrep", "-v", "--msgstr", "-F", "-e", "'#-#-#-#-#'", "-")
-	cmd3 := exec.Command("tee", tmpDir+"/unchanged")
-	return runPipeline(cmd1, cmd2, cmd3)
+func extractUnchanged(output, local, other string) error {
+	cmd1 := fmt.Sprintf("msgcat --force-po -o - %s %s", local, other)
+	cmd2 := "msggrep -v --msgstr -F -e \"#-#-#-#-#\" -"
+	cmd3 := fmt.Sprintf("tee %s", output)
+	return runPipeline(fmt.Sprintf("%s | %s | %s", cmd1, cmd2, cmd3))
 }
 
 // Extract changes
-func extractChanges(in string, base string, out string) error {
-	cmd1 := exec.Command("msgcat", "-o", "-", in, base)
-	cmd2 := exec.Command("msggrep", "--msgstr", "-F", "-e", "'#-#-#-#-#'", "-")
-	cmd3 := exec.Command(
-		"msgmerge",
-		"--force-po",
-		"--quiet",
-		"--no-fuzzy-matching",
-		"-o",
-		"-",
-		in,
-		"-",
-	)
-	cmd4 := exec.Command("msgattrib", "--no-obsolete")
-	cmd5 := exec.Command("tee", out)
+func extractChanges(in, base, out string) error {
+	cmd1 := fmt.Sprintf("msgcat -o - %s %s", in, base)
+	cmd2 := "msggrep --msgstr -F -e \"#-#-#-#-#\" -"
+	cmd3 := fmt.Sprintf("msgmerge --force-po --quiet --no-fuzzy-matching -o - %s -", in)
+	cmd4 := "msgattrib --no-obsolete"
+	cmd5 := fmt.Sprintf("tee %s", out)
 
 	// Run the pipeline
-	return runPipeline(cmd1, cmd2, cmd3, cmd4, cmd5)
+	return runPipeline(fmt.Sprintf("%s | %s | %s | %s | %s", cmd1, cmd2, cmd3, cmd4, cmd5))
 }
 
 //// Command execution functions
@@ -259,29 +219,11 @@ func runExecutable(name string, args ...string) error {
 
 // Runs a pipeline of commands.
 // stdout of each command is connected to the stdin of the next command.
-func runPipeline(cmds ...*exec.Cmd) error {
-	for i := 0; i < len(cmds)-1; i++ {
-		out, err := cmds[i].StdoutPipe()
-		if err != nil {
-			return err
-		}
-		cmds[i+1].Stdin = out
+func runPipeline(command string) error {
+	if runtime.GOOS == "windows" {
+		return exec.Command("powershell", "-Command", command).Run()
 	}
-
-	cmds[len(cmds)-1].Stdout = os.Stdout
-	for _, cmd := range cmds {
-		if err := cmd.Start(); err != nil {
-			return err
-		}
-	}
-
-	for _, cmd := range cmds {
-		if err := cmd.Wait(); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return exec.Command("bash", "-c", command).Run()
 }
 
 //// Utility functions
@@ -296,7 +238,7 @@ func checkDependencies() error {
 	// Loop through each executable and check if it's available
 	for _, exe := range executables {
 		if _, err := exec.LookPath(exe); err != nil {
-			return fmt.Errorf("executable '%s' needs to be installed.\n", exe)
+			return fmt.Errorf("executable '%s' needs to be installed", exe)
 		}
 	}
 	return nil
