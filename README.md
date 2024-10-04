@@ -6,13 +6,26 @@
 Git merge driver for PO-files.
 
 - Provides a 3-way merge interface `pomerge a b c`.
-- Marks the conflicts in a git-styled markers instead of the `gettext` markers. // TODO
 
 ## Installation
 
 Install with `go install github.com/adventune/pomerge`.
 
 ## Usage
+
+### Configure as merge driver
+
+Git config:
+```sh
+git config merge.pomerge.driver "pomerge %A %O %B"
+```
+
+Also make sure that there is a following `.gitattributes` configuration:
+```
+[attr]POFILE merge=pomerge
+
+*.po POFILE
+```
 
 ### Executable
 
