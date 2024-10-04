@@ -1,8 +1,11 @@
 default:
-	go build -o ./build .
+	go build -o ./build/ .
 
 windows:
-	GOOS=windows go build -o ./build .
+	GOOS=windows go build -o ./build/ .
 linux:
-	GOOS=linux go build -o ./build .
+	GOOS=linux go build -o ./build/ .
 all: windows linux
+
+clean:
+	rm -rf ./build/
