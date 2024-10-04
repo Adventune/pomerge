@@ -57,7 +57,9 @@ func run(cmd *cobra.Command, args []string) {
 
 // Exit with an error message
 func exitErr(msg string) {
-	fmt.Println(msg)
+	if verbose {
+		fmt.Println(msg)
+	}
 	os.Exit(1)
 }
 
